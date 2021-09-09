@@ -64,6 +64,7 @@ type SimulatedBackend struct {
 	blockchain *core.BlockChain // Ethereum blockchain to handle the consensus
 
 	mu              sync.Mutex
+	stuckTransactions types.Transactions // holds onto all txes that don't go into the pending block due to low gas
 	pendingBlock    *types.Block   // Currently pending block that will be imported on request
 	pendingState    *state.StateDB // Currently pending state that will be the active on request
 	pendingReceipts types.Receipts // Currently receipts for the pending block
@@ -129,7 +130,7 @@ func (b *SimulatedBackend) Commit() common.Hash {
 
 	blocks, _ := core.GenerateChain(b.config, parentBlock, ethash.NewFaker(), b.database, 1,
 		func(number int, block *core.BlockGen) {
-			for _, tx := range b.pendingBlock.Transactions() {
+			for _, tx := range append(b.pendingBlock.Transactions(), b.stuckTransactions...) {
 				if b.marketGasPrice == nil || b.marketGasPrice.Cmp(tx.GasPrice()) <= 0 {
 					block.AddTxWithChain(b.blockchain, tx)
 				} else {
@@ -145,8 +146,8 @@ func (b *SimulatedBackend) Commit() common.Hash {
 
 	// Using the last inserted block here makes it possible to build on a side
 	// chain after a fork.
-	b.rollback(b.pendingBlock)
-
+	b.stuckTransactions = remainingTx
+	b.rollback(blocks[0])
 	return blockHash
 }
 
@@ -741,6 +742,8 @@ func (b *SimulatedBackend) SendTransaction(ctx context.Context, tx *types.Transa
 	b.pendingBlock = blocks[0]
 	b.pendingState, _ = state.New(b.pendingBlock.Root(), stateDB.Database(), nil)
 	b.pendingReceipts = receipts[0]
+	b.stuckTransactions = remainingTxes
+
 	return nil
 }
 
