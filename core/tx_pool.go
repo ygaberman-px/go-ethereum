@@ -533,7 +533,7 @@ func (pool *TxPool) ContentFrom(addr common.Address) (types.Transactions, types.
 // The enforceTips parameter can be used to do an extra filtering on the pending
 // transactions and only return those whose **effective** tip is large enough in
 // the next pending execution environment.
-func (pool *TxPool) Pending(enforceTips bool) (map[common.Address]types.Transactions, error) {
+func (pool *TxPool) Pending(enforceTips bool) map[common.Address]types.Transactions {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 
@@ -554,7 +554,7 @@ func (pool *TxPool) Pending(enforceTips bool) (map[common.Address]types.Transact
 			pending[addr] = txs
 		}
 	}
-	return pending, nil
+	return pending
 }
 
 // Locals retrieves the accounts currently considered local by the pool.
@@ -1182,16 +1182,18 @@ func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirt
 			pendingBaseFee := misc.CalcBaseFee(pool.chainconfig, reset.newHead)
 			pool.priced.SetBaseFee(pendingBaseFee)
 		}
+		// Update all accounts to the latest known pending nonce
+		nonces := make(map[common.Address]uint64, len(pool.pending))
+		for addr, list := range pool.pending {
+			highestPending := list.LastElement()
+			nonces[addr] = highestPending.Nonce() + 1
+		}
+		pool.pendingNonces.setAll(nonces)
 	}
 	// Ensure pool.queue and pool.pending sizes stay within the configured limits.
 	pool.truncatePending()
 	pool.truncateQueue()
 
-	// Update all accounts to the latest known pending nonce
-	for addr, list := range pool.pending {
-		highestPending := list.LastElement()
-		pool.pendingNonces.set(addr, highestPending.Nonce()+1)
-	}
 	dropBetweenReorgHistogram.Update(int64(pool.changesSinceReorg))
 	pool.changesSinceReorg = 0 // Reset change counter
 	pool.mu.Unlock()
@@ -1474,7 +1476,7 @@ func (pool *TxPool) truncateQueue() {
 			addresses = append(addresses, addressByHeartbeat{addr, pool.beats[addr]})
 		}
 	}
-	sort.Sort(addresses)
+	sort.Sort(sort.Reverse(addresses))
 
 	// Drop transactions until the total is below the limit or only locals remain
 	for drop := queued - pool.config.GlobalQueue; drop > 0 && len(addresses) > 0; {

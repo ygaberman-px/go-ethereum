@@ -88,6 +88,13 @@ func Bind(types []string, abis []string, bytecodes []string, fsigs []map[string]
 			transactIdentifiers = make(map[string]bool)
 			eventIdentifiers    = make(map[string]bool)
 		)
+
+		for _, input := range evmABI.Constructor.Inputs {
+			if hasStruct(input.Type) {
+				bindStructType[lang](input.Type, structs)
+			}
+		}
+
 		for _, original := range evmABI.Methods {
 			// Normalize the method for capital cases and non-anonymous inputs/outputs
 			normalized := original
@@ -172,7 +179,7 @@ func Bind(types []string, abis []string, bytecodes []string, fsigs []map[string]
 
 		contracts[types[i]] = &tmplContract{
 			Type:        capitalise(types[i]),
-			InputABI:    strings.Replace(strippedABI, "\"", "\\\"", -1),
+			InputABI:    strings.ReplaceAll(strippedABI, "\"", "\\\""),
 			InputBin:    strings.TrimPrefix(strings.TrimSpace(bytecodes[i]), "0x"),
 			Constructor: evmABI.Constructor,
 			Calls:       calls,

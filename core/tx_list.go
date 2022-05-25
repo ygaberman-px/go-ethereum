@@ -295,9 +295,9 @@ func (l *txList) Add(tx *types.Transaction, priceBump uint64) (bool, *types.Tran
 		thresholdFeeCap := aFeeCap.Div(aFeeCap, b)
 		thresholdTip := aTip.Div(aTip, b)
 
-		// Have to ensure that either the new fee cap or tip is higher than the
+		// We have to ensure that both the new fee cap and tip are higher than the
 		// old ones as well as checking the percentage threshold to ensure that
-		// this is accurate for low (Wei-level) gas price replacements
+		// this is accurate for low (Wei-level) gas price replacements.
 		if tx.GasFeeCapIntCmp(thresholdFeeCap) < 0 || tx.GasTipCapIntCmp(thresholdTip) < 0 {
 			return false, nil
 		}
@@ -480,9 +480,14 @@ func (h *priceHeap) Pop() interface{} {
 // better candidates for inclusion while in other cases (at the top of the baseFee peak)
 // the floating heap is better. When baseFee is decreasing they behave similarly.
 type txPricedList struct {
+	// Number of stale price points to (re-heap trigger).
+	// This field is accessed atomically, and must be the first field
+	// to ensure it has correct alignment for atomic.AddInt64.
+	// See https://golang.org/pkg/sync/atomic/#pkg-note-BUG.
+	stales int64
+
 	all              *txLookup  // Pointer to the map of all transactions
 	urgent, floating priceHeap  // Heaps of prices of all the stored **remote** transactions
-	stales           int64      // Number of stale price points to (re-heap trigger)
 	reheapMu         sync.Mutex // Mutex asserts that only one routine is reheaping the list
 }
 

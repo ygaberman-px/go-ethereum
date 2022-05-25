@@ -460,12 +460,7 @@ func (s *StateDB) updateStateObject(obj *stateObject) {
 	}
 	// Encode the account and update the account trie
 	addr := obj.Address()
-
-	data, err := rlp.EncodeToBytes(obj)
-	if err != nil {
-		panic(fmt.Errorf("can't encode object at %x: %v", addr[:], err))
-	}
-	if err = s.trie.TryUpdate(addr[:], data); err != nil {
+	if err := s.trie.TryUpdateAccount(addr[:], &obj.data); err != nil {
 		s.setError(fmt.Errorf("updateStateObject (%x) error: %v", addr[:], err))
 	}
 
@@ -511,20 +506,18 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *stateObject {
 		return obj
 	}
 	// If no live objects are available, attempt to use snapshots
-	var (
-		data *Account
-		err  error
-	)
+	var data *types.StateAccount
 	if s.snap != nil {
+		start := time.Now()
+		acc, err := s.snap.Account(crypto.HashData(s.hasher, addr.Bytes()))
 		if metrics.EnabledExpensive {
-			defer func(start time.Time) { s.SnapshotAccountReads += time.Since(start) }(time.Now())
+			s.SnapshotAccountReads += time.Since(start)
 		}
-		var acc *snapshot.Account
-		if acc, err = s.snap.Account(crypto.HashData(s.hasher, addr.Bytes())); err == nil {
+		if err == nil {
 			if acc == nil {
 				return nil
 			}
-			data = &Account{
+			data = &types.StateAccount{
 				Nonce:    acc.Nonce,
 				Balance:  acc.Balance,
 				CodeHash: acc.CodeHash,
@@ -539,11 +532,12 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *stateObject {
 		}
 	}
 	// If snapshot unavailable or reading from it failed, load from the database
-	if s.snap == nil || err != nil {
-		if metrics.EnabledExpensive {
-			defer func(start time.Time) { s.AccountReads += time.Since(start) }(time.Now())
-		}
+	if data == nil {
+		start := time.Now()
 		enc, err := s.trie.TryGet(addr.Bytes())
+		if metrics.EnabledExpensive {
+			s.AccountReads += time.Since(start)
+		}
 		if err != nil {
 			s.setError(fmt.Errorf("getDeleteStateObject (%x) error: %v", addr.Bytes(), err))
 			return nil
@@ -551,7 +545,7 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *stateObject {
 		if len(enc) == 0 {
 			return nil
 		}
-		data = new(Account)
+		data = new(types.StateAccount)
 		if err := rlp.DecodeBytes(enc, data); err != nil {
 			log.Error("Failed to decode state object", "addr", addr, "err", err)
 			return nil
@@ -588,7 +582,7 @@ func (s *StateDB) createObject(addr common.Address) (newobj, prev *stateObject) 
 			s.snapDestructs[prev.addrHash] = struct{}{}
 		}
 	}
-	newobj = newObject(s, addr, Account{})
+	newobj = newObject(s, addr, types.StateAccount{})
 	if prev == nil {
 		s.journal.append(createObjectChange{account: &addr})
 	} else {
@@ -890,7 +884,6 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 func (s *StateDB) Prepare(thash common.Hash, ti int) {
 	s.thash = thash
 	s.txIndex = ti
-	s.accessList = newAccessList()
 }
 
 func (s *StateDB) clearJournalAndRefund() {
@@ -942,7 +935,7 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 	}
 	// The onleaf func is called _serially_, so we can reuse the same account
 	// for unmarshalling every time.
-	var account Account
+	var account types.StateAccount
 	root, accountCommitted, err := s.trie.Commit(func(_ [][]byte, _ []byte, leaf []byte, parent common.Hash) error {
 		if err := rlp.DecodeBytes(leaf, &account); err != nil {
 			return nil
@@ -1000,6 +993,9 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 //
 // This method should only be called if Berlin/2929+2930 is applicable at the current number.
 func (s *StateDB) PrepareAccessList(sender common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
+	// Clear out any leftover from previous executions
+	s.accessList = newAccessList()
+
 	s.AddAddressToAccessList(sender)
 	if dst != nil {
 		s.AddAddressToAccessList(*dst)
