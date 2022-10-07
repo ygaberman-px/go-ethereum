@@ -34,20 +34,21 @@ import (
 //
 // The entry points for incoming messages are:
 //
-//	h.handleMsg(message)
-//	h.handleBatch(message)
+//    h.handleMsg(message)
+//    h.handleBatch(message)
 //
 // Outgoing calls use the requestOp struct. Register the request before sending it
 // on the connection:
 //
-//	op := &requestOp{ids: ...}
-//	h.addRequestOp(op)
+//    op := &requestOp{ids: ...}
+//    h.addRequestOp(op)
 //
 // Now send the request, then wait for the reply to be delivered through handleMsg:
 //
-//	if err := op.wait(...); err != nil {
-//		h.removeRequestOp(op) // timeout, etc.
-//	}
+//    if err := op.wait(...); err != nil {
+//        h.removeRequestOp(op) // timeout, etc.
+//    }
+//
 type handler struct {
 	reg            *serviceRegistry
 	unsubscribeCb  *callback
@@ -345,7 +346,7 @@ func (h *handler) handleCall(cp *callProc, msg *jsonrpcMessage) *jsonrpcMessage 
 			successfulRequestGauge.Inc(1)
 		}
 		rpcServingTimer.UpdateSince(start)
-		updateServeTimeHistogram(msg.Method, answer.Error == nil, time.Since(start))
+		newRPCServingTimer(msg.Method, answer.Error == nil).UpdateSince(start)
 	}
 	return answer
 }
@@ -353,10 +354,7 @@ func (h *handler) handleCall(cp *callProc, msg *jsonrpcMessage) *jsonrpcMessage 
 // handleSubscribe processes *_subscribe method calls.
 func (h *handler) handleSubscribe(cp *callProc, msg *jsonrpcMessage) *jsonrpcMessage {
 	if !h.allowSubscribe {
-		return msg.errorResponse(&internalServerError{
-			code:    errcodeNotificationsUnsupported,
-			message: ErrNotificationsUnsupported.Error(),
-		})
+		return msg.errorResponse(ErrNotificationsUnsupported)
 	}
 
 	// Subscription method name is first argument.

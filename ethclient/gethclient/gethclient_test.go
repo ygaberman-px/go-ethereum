@@ -19,7 +19,6 @@ package gethclient
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"math/big"
 	"testing"
 
@@ -27,11 +26,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
-	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/params"
@@ -61,12 +60,6 @@ func newTestBackend(t *testing.T) (*node.Node, []*types.Block) {
 	if err != nil {
 		t.Fatalf("can't create new ethereum service: %v", err)
 	}
-	filterSystem := filters.NewFilterSystem(ethservice.APIBackend, filters.Config{})
-	n.RegisterAPIs([]rpc.API{{
-		Namespace: "eth",
-		Service:   filters.NewFilterAPI(filterSystem, false),
-	}})
-
 	// Import the test chain.
 	if err := n.Start(); err != nil {
 		t.Fatalf("can't start test node: %v", err)
@@ -78,8 +71,10 @@ func newTestBackend(t *testing.T) (*node.Node, []*types.Block) {
 }
 
 func generateTestChain() (*core.Genesis, []*types.Block) {
+	db := rawdb.NewMemoryDatabase()
+	config := params.AllEthashProtocolChanges
 	genesis := &core.Genesis{
-		Config:    params.AllEthashProtocolChanges,
+		Config:    config,
 		Alloc:     core.GenesisAlloc{testAddr: {Balance: testBalance, Storage: map[common.Hash]common.Hash{testSlot: testValue}}},
 		ExtraData: []byte("test genesis"),
 		Timestamp: 9000,
@@ -88,8 +83,10 @@ func generateTestChain() (*core.Genesis, []*types.Block) {
 		g.OffsetTime(5)
 		g.SetExtra([]byte("test"))
 	}
-	_, blocks, _ := core.GenerateChainWithGenesis(genesis, ethash.NewFaker(), 1, generate)
-	blocks = append([]*types.Block{genesis.ToBlock()}, blocks...)
+	gblock := genesis.ToBlock(db)
+	engine := ethash.NewFaker()
+	blocks, _ := core.GenerateChain(config, gblock, engine, db, 1, generate)
+	blocks = append([]*types.Block{gblock}, blocks...)
 	return genesis, blocks
 }
 
@@ -225,6 +222,7 @@ func testGetProof(t *testing.T, client *rpc.Client) {
 	if proof.Key != testSlot.String() {
 		t.Fatalf("invalid storage proof key, want: %v, got: %v", testSlot.String(), proof.Key)
 	}
+
 }
 
 func testGCStats(t *testing.T, client *rpc.Client) {
@@ -321,55 +319,5 @@ func testCallContract(t *testing.T, client *rpc.Client) {
 	mapAcc[testAddr] = override
 	if _, err := ec.CallContract(context.Background(), msg, big.NewInt(0), &mapAcc); err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestOverrideAccountMarshal(t *testing.T) {
-	om := map[common.Address]OverrideAccount{
-		common.Address{0x11}: OverrideAccount{
-			// Zero-valued nonce is not overriddden, but simply dropped by the encoder.
-			Nonce: 0,
-		},
-		common.Address{0xaa}: OverrideAccount{
-			Nonce: 5,
-		},
-		common.Address{0xbb}: OverrideAccount{
-			Code: []byte{1},
-		},
-		common.Address{0xcc}: OverrideAccount{
-			// 'code', 'balance', 'state' should be set when input is
-			// a non-nil but empty value.
-			Code:    []byte{},
-			Balance: big.NewInt(0),
-			State:   map[common.Hash]common.Hash{},
-			// For 'stateDiff' the behavior is different, empty map
-			// is ignored because it makes no difference.
-			StateDiff: map[common.Hash]common.Hash{},
-		},
-	}
-
-	marshalled, err := json.MarshalIndent(&om, "", "  ")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expected := `{
-  "0x1100000000000000000000000000000000000000": {},
-  "0xaa00000000000000000000000000000000000000": {
-    "nonce": "0x5"
-  },
-  "0xbb00000000000000000000000000000000000000": {
-    "code": "0x01"
-  },
-  "0xcc00000000000000000000000000000000000000": {
-    "code": "0x",
-    "balance": "0x0",
-    "state": {}
-  }
-}`
-
-	if string(marshalled) != expected {
-		t.Error("wrong output:", string(marshalled))
-		t.Error("want:", expected)
 	}
 }

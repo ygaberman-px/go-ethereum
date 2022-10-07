@@ -49,9 +49,7 @@ func (txn *txNoncer) get(addr common.Address) uint64 {
 	defer txn.lock.Unlock()
 
 	if _, ok := txn.nonces[addr]; !ok {
-		if nonce := txn.fallback.GetNonce(addr); nonce != 0 {
-			txn.nonces[addr] = nonce
-		}
+		txn.nonces[addr] = txn.fallback.GetNonce(addr)
 	}
 	return txn.nonces[addr]
 }
@@ -66,15 +64,13 @@ func (txn *txNoncer) set(addr common.Address, nonce uint64) {
 }
 
 // setIfLower updates a new virtual nonce into the virtual state database if the
-// new one is lower.
+// the new one is lower.
 func (txn *txNoncer) setIfLower(addr common.Address, nonce uint64) {
 	txn.lock.Lock()
 	defer txn.lock.Unlock()
 
 	if _, ok := txn.nonces[addr]; !ok {
-		if nonce := txn.fallback.GetNonce(addr); nonce != 0 {
-			txn.nonces[addr] = nonce
-		}
+		txn.nonces[addr] = txn.fallback.GetNonce(addr)
 	}
 	if txn.nonces[addr] <= nonce {
 		return

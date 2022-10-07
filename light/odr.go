@@ -53,11 +53,9 @@ type OdrRequest interface {
 
 // TrieID identifies a state or account storage trie
 type TrieID struct {
-	BlockHash   common.Hash
-	BlockNumber uint64
-	StateRoot   common.Hash
-	Root        common.Hash
-	AccKey      []byte
+	BlockHash, Root common.Hash
+	BlockNumber     uint64
+	AccKey          []byte
 }
 
 // StateTrieID returns a TrieID for a state trie belonging to a certain block
@@ -66,9 +64,8 @@ func StateTrieID(header *types.Header) *TrieID {
 	return &TrieID{
 		BlockHash:   header.Hash(),
 		BlockNumber: header.Number.Uint64(),
-		StateRoot:   header.Root,
-		Root:        header.Root,
 		AccKey:      nil,
+		Root:        header.Root,
 	}
 }
 
@@ -79,7 +76,6 @@ func StorageTrieID(state *TrieID, addrHash, root common.Hash) *TrieID {
 	return &TrieID{
 		BlockHash:   state.BlockHash,
 		BlockNumber: state.BlockNumber,
-		StateRoot:   state.StateRoot,
 		AccKey:      addrHash[:],
 		Root:        root,
 	}

@@ -29,23 +29,16 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers"
 )
 
-//go:generate go run github.com/fjl/gencodec -type account -field-override accountMarshaling -out gen_account_json.go
-
 func init() {
 	register("prestateTracer", newPrestateTracer)
 }
 
 type prestate = map[common.Address]*account
 type account struct {
-	Balance *big.Int                    `json:"balance"`
+	Balance string                      `json:"balance"`
 	Nonce   uint64                      `json:"nonce"`
-	Code    []byte                      `json:"code"`
+	Code    string                      `json:"code"`
 	Storage map[common.Hash]common.Hash `json:"storage"`
-}
-
-type accountMarshaling struct {
-	Balance *hexutil.Big
-	Code    hexutil.Bytes
 }
 
 type prestateTracer struct {
@@ -58,10 +51,10 @@ type prestateTracer struct {
 	reason    error  // Textual reason for the interruption
 }
 
-func newPrestateTracer(ctx *tracers.Context, _ json.RawMessage) (tracers.Tracer, error) {
+func newPrestateTracer(ctx *tracers.Context) tracers.Tracer {
 	// First callframe contains tx context info
 	// and is populated on start and end.
-	return &prestateTracer{prestate: prestate{}}, nil
+	return &prestateTracer{prestate: prestate{}}
 }
 
 // CaptureStart implements the EVMLogger interface to initialize the tracing operation.
@@ -74,16 +67,17 @@ func (t *prestateTracer) CaptureStart(env *vm.EVM, from common.Address, to commo
 	t.lookupAccount(to)
 
 	// The recipient balance includes the value transferred.
-	toBal := new(big.Int).Sub(t.prestate[to].Balance, value)
-	t.prestate[to].Balance = toBal
+	toBal := hexutil.MustDecodeBig(t.prestate[to].Balance)
+	toBal = new(big.Int).Sub(toBal, value)
+	t.prestate[to].Balance = hexutil.EncodeBig(toBal)
 
 	// The sender balance is after reducing: value and gasLimit.
 	// We need to re-add them to get the pre-tx balance.
-	fromBal := new(big.Int).Set(t.prestate[from].Balance)
+	fromBal := hexutil.MustDecodeBig(t.prestate[from].Balance)
 	gasPrice := env.TxContext.GasPrice
 	consumedGas := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(t.gasLimit))
 	fromBal.Add(fromBal, new(big.Int).Add(value, consumedGas))
-	t.prestate[from].Balance = fromBal
+	t.prestate[from].Balance = hexutil.EncodeBig(fromBal)
 	t.prestate[from].Nonce--
 }
 
@@ -166,9 +160,9 @@ func (t *prestateTracer) lookupAccount(addr common.Address) {
 		return
 	}
 	t.prestate[addr] = &account{
-		Balance: t.env.StateDB.GetBalance(addr),
+		Balance: bigToHex(t.env.StateDB.GetBalance(addr)),
 		Nonce:   t.env.StateDB.GetNonce(addr),
-		Code:    t.env.StateDB.GetCode(addr),
+		Code:    bytesToHex(t.env.StateDB.GetCode(addr)),
 		Storage: make(map[common.Hash]common.Hash),
 	}
 }

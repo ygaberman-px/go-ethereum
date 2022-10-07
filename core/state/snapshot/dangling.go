@@ -18,7 +18,9 @@ package snapshot
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -32,7 +34,7 @@ import (
 // storage also has corresponding account data.
 func CheckDanglingStorage(chaindb ethdb.KeyValueStore) error {
 	if err := checkDanglingDiskStorage(chaindb); err != nil {
-		log.Error("Database check error", "err", err)
+		return err
 	}
 	return checkDanglingMemStorage(chaindb)
 }
@@ -73,80 +75,81 @@ func checkDanglingDiskStorage(chaindb ethdb.KeyValueStore) error {
 // checkDanglingMemStorage checks if there is any 'dangling' storage in the journalled
 // snapshot difflayers.
 func checkDanglingMemStorage(db ethdb.KeyValueStore) error {
-	start := time.Now()
-	log.Info("Checking dangling journalled storage")
-	err := iterateJournal(db, func(pRoot, root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, storage map[common.Hash]map[common.Hash][]byte) error {
-		for accHash := range storage {
-			if _, ok := accounts[accHash]; !ok {
-				log.Error("Dangling storage - missing account", "account", fmt.Sprintf("%#x", accHash), "root", root)
-			}
-		}
+	var (
+		start   = time.Now()
+		journal = rawdb.ReadSnapshotJournal(db)
+	)
+	if len(journal) == 0 {
+		log.Warn("Loaded snapshot journal", "diffs", "missing")
 		return nil
-	})
+	}
+	r := rlp.NewStream(bytes.NewReader(journal), 0)
+	// Firstly, resolve the first element as the journal version
+	version, err := r.Uint()
 	if err != nil {
-		log.Info("Failed to resolve snapshot journal", "err", err)
+		log.Warn("Failed to resolve the journal version", "error", err)
+		return nil
+	}
+	if version != journalVersion {
+		log.Warn("Discarded the snapshot journal with wrong version", "required", journalVersion, "got", version)
+		return nil
+	}
+	// Secondly, resolve the disk layer root, ensure it's continuous
+	// with disk layer. Note now we can ensure it's the snapshot journal
+	// correct version, so we expect everything can be resolved properly.
+	var root common.Hash
+	if err := r.Decode(&root); err != nil {
+		return errors.New("missing disk layer root")
+	}
+	// The diff journal is not matched with disk, discard them.
+	// It can happen that Geth crashes without persisting the latest
+	// diff journal.
+	// Load all the snapshot diffs from the journal
+	if err := checkDanglingJournalStorage(r); err != nil {
 		return err
 	}
 	log.Info("Verified the snapshot journalled storage", "time", common.PrettyDuration(time.Since(start)))
 	return nil
 }
 
-// CheckJournalAccount shows information about an account, from the disk layer and
-// up through the diff layers.
-func CheckJournalAccount(db ethdb.KeyValueStore, hash common.Hash) error {
-	// Look up the disk layer first
-	baseRoot := rawdb.ReadSnapshotRoot(db)
-	fmt.Printf("Disklayer: Root: %x\n", baseRoot)
-	if data := rawdb.ReadAccountSnapshot(db, hash); data != nil {
-		account := new(Account)
-		if err := rlp.DecodeBytes(data, account); err != nil {
-			panic(err)
-		}
-		fmt.Printf("\taccount.nonce: %d\n", account.Nonce)
-		fmt.Printf("\taccount.balance: %x\n", account.Balance)
-		fmt.Printf("\taccount.root: %x\n", account.Root)
-		fmt.Printf("\taccount.codehash: %x\n", account.CodeHash)
-	}
-	// Check storage
-	{
-		it := rawdb.NewKeyLengthIterator(db.NewIterator(append(rawdb.SnapshotStoragePrefix, hash.Bytes()...), nil), 1+2*common.HashLength)
-		fmt.Printf("\tStorage:\n")
-		for it.Next() {
-			slot := it.Key()[33:]
-			fmt.Printf("\t\t%x: %x\n", slot, it.Value())
-		}
-		it.Release()
-	}
-	var depth = 0
-
-	return iterateJournal(db, func(pRoot, root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, storage map[common.Hash]map[common.Hash][]byte) error {
-		_, a := accounts[hash]
-		_, b := destructs[hash]
-		_, c := storage[hash]
-		depth++
-		if !a && !b && !c {
-			return nil
-		}
-		fmt.Printf("Disklayer+%d: Root: %x, parent %x\n", depth, root, pRoot)
-		if data, ok := accounts[hash]; ok {
-			account := new(Account)
-			if err := rlp.DecodeBytes(data, account); err != nil {
-				panic(err)
+// loadDiffLayer reads the next sections of a snapshot journal, reconstructing a new
+// diff and verifying that it can be linked to the requested parent.
+func checkDanglingJournalStorage(r *rlp.Stream) error {
+	for {
+		// Read the next diff journal entry
+		var root common.Hash
+		if err := r.Decode(&root); err != nil {
+			// The first read may fail with EOF, marking the end of the journal
+			if err == io.EOF {
+				return nil
 			}
-			fmt.Printf("\taccount.nonce: %d\n", account.Nonce)
-			fmt.Printf("\taccount.balance: %x\n", account.Balance)
-			fmt.Printf("\taccount.root: %x\n", account.Root)
-			fmt.Printf("\taccount.codehash: %x\n", account.CodeHash)
+			return fmt.Errorf("load diff root: %v", err)
 		}
-		if _, ok := destructs[hash]; ok {
-			fmt.Printf("\t Destructed!")
+		var destructs []journalDestruct
+		if err := r.Decode(&destructs); err != nil {
+			return fmt.Errorf("load diff destructs: %v", err)
 		}
-		if data, ok := storage[hash]; ok {
-			fmt.Printf("\tStorage\n")
-			for k, v := range data {
-				fmt.Printf("\t\t%x: %x\n", k, v)
+		var accounts []journalAccount
+		if err := r.Decode(&accounts); err != nil {
+			return fmt.Errorf("load diff accounts: %v", err)
+		}
+		accountData := make(map[common.Hash][]byte)
+		for _, entry := range accounts {
+			if len(entry.Blob) > 0 { // RLP loses nil-ness, but `[]byte{}` is not a valid item, so reinterpret that
+				accountData[entry.Hash] = entry.Blob
+			} else {
+				accountData[entry.Hash] = nil
 			}
 		}
-		return nil
-	})
+		var storage []journalStorage
+		if err := r.Decode(&storage); err != nil {
+			return fmt.Errorf("load diff storage: %v", err)
+		}
+		for _, entry := range storage {
+			if _, ok := accountData[entry.Hash]; !ok {
+				log.Error("Dangling storage - missing account", "account", fmt.Sprintf("%#x", entry.Hash), "root", root)
+				return fmt.Errorf("dangling journal snapshot storage account %#x", entry.Hash)
+			}
+		}
+	}
 }

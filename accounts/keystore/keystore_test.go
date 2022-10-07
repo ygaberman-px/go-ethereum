@@ -214,7 +214,7 @@ func TestSignRace(t *testing.T) {
 // Tests that the wallet notifier loop starts and stops correctly based on the
 // addition and removal of wallet event subscriptions.
 func TestWalletNotifierLifecycle(t *testing.T) {
-	// Create a temporary keystore to test with
+	// Create a temporary kesytore to test with
 	_, ks := tmpKeyStore(t, false)
 
 	// Ensure that the notification updater is not running yet
@@ -377,6 +377,7 @@ func TestImportExport(t *testing.T) {
 	if _, err = ks2.Import(json, "new", "new"); err == nil {
 		t.Errorf("importing a key twice succeeded")
 	}
+
 }
 
 // TestImportRace tests the keystore on races.
@@ -401,6 +402,7 @@ func TestImportRace(t *testing.T) {
 			if _, err := ks2.Import(json, "new", "new"); err != nil {
 				atomic.AddUint32(&atom, 1)
 			}
+
 		}()
 	}
 	wg.Wait()

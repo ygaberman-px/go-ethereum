@@ -23,12 +23,14 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/light"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -283,7 +285,7 @@ func ServiceGetAccountRangeQuery(chain *core.BlockChain, req *GetAccountRangePac
 		req.Bytes = softResponseLimit
 	}
 	// Retrieve the requested state and bail out if non existent
-	tr, err := trie.New(trie.StateTrieID(req.Root), chain.StateCache().TrieDB())
+	tr, err := trie.New(req.Root, chain.StateCache().TrieDB())
 	if err != nil {
 		return nil, nil
 	}
@@ -413,16 +415,15 @@ func ServiceGetStorageRangesQuery(chain *core.BlockChain, req *GetStorageRangesP
 		if origin != (common.Hash{}) || (abort && len(storage) > 0) {
 			// Request started at a non-zero hash or was capped prematurely, add
 			// the endpoint Merkle proofs
-			accTrie, err := trie.NewStateTrie(trie.StateTrieID(req.Root), chain.StateCache().TrieDB())
+			accTrie, err := trie.New(req.Root, chain.StateCache().TrieDB())
 			if err != nil {
 				return nil, nil
 			}
-			acc, err := accTrie.TryGetAccountWithPreHashedKey(account[:])
-			if err != nil || acc == nil {
+			var acc types.StateAccount
+			if err := rlp.DecodeBytes(accTrie.Get(account[:]), &acc); err != nil {
 				return nil, nil
 			}
-			id := trie.StorageTrieID(req.Root, account, acc.Root)
-			stTrie, err := trie.NewStateTrie(id, chain.StateCache().TrieDB())
+			stTrie, err := trie.New(acc.Root, chain.StateCache().TrieDB())
 			if err != nil {
 				return nil, nil
 			}
@@ -488,7 +489,7 @@ func ServiceGetTrieNodesQuery(chain *core.BlockChain, req *GetTrieNodesPacket, s
 	// Make sure we have the state associated with the request
 	triedb := chain.StateCache().TrieDB()
 
-	accTrie, err := trie.NewStateTrie(trie.StateTrieID(req.Root), triedb)
+	accTrie, err := trie.NewSecure(req.Root, triedb)
 	if err != nil {
 		// We don't have the requested state available, bail out
 		return nil, nil
@@ -505,7 +506,7 @@ func ServiceGetTrieNodesQuery(chain *core.BlockChain, req *GetTrieNodesPacket, s
 	var (
 		nodes [][]byte
 		bytes uint64
-		loads int // Trie hash expansions to count database reads
+		loads int // Trie hash expansions to cound database reads
 	)
 	for _, pathset := range req.Paths {
 		switch len(pathset) {
@@ -530,8 +531,7 @@ func ServiceGetTrieNodesQuery(chain *core.BlockChain, req *GetTrieNodesPacket, s
 			if err != nil || account == nil {
 				break
 			}
-			id := trie.StorageTrieID(req.Root, common.BytesToHash(pathset[0]), common.BytesToHash(account.Root))
-			stTrie, err := trie.NewStateTrie(id, triedb)
+			stTrie, err := trie.NewSecure(common.BytesToHash(account.Root), triedb)
 			loads++ // always account database reads, even for failures
 			if err != nil {
 				break

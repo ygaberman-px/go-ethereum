@@ -31,7 +31,7 @@ type ChainContext interface {
 	// Engine retrieves the chain's consensus engine.
 	Engine() consensus.Engine
 
-	// GetHeader returns the header corresponding to the hash/number argument pair.
+	// GetHeader returns the hash corresponding to their hash.
 	GetHeader(common.Hash, uint64) *types.Header
 }
 

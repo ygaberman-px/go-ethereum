@@ -54,13 +54,15 @@ var (
 )
 
 func makechain() (bc *core.BlockChain, addrHashes, txHashes []common.Hash) {
-	gspec := &core.Genesis{
+	db := rawdb.NewMemoryDatabase()
+	gspec := core.Genesis{
 		Config:   params.TestChainConfig,
 		Alloc:    core.GenesisAlloc{bankAddr: {Balance: bankFunds}},
 		GasLimit: 100000000,
 	}
+	genesis := gspec.MustCommit(db)
 	signer := types.HomesteadSigner{}
-	_, blocks, _ := core.GenerateChainWithGenesis(gspec, ethash.NewFaker(), testChainLen,
+	blocks, _ := core.GenerateChain(gspec.Config, genesis, ethash.NewFaker(), db, testChainLen,
 		func(i int, gen *core.BlockGen) {
 			var (
 				tx   *types.Transaction
@@ -78,7 +80,7 @@ func makechain() (bc *core.BlockChain, addrHashes, txHashes []common.Hash) {
 			addrHashes = append(addrHashes, crypto.Keccak256Hash(addr[:]))
 			txHashes = append(txHashes, tx.Hash())
 		})
-	bc, _ = core.NewBlockChain(rawdb.NewMemoryDatabase(), nil, gspec, nil, ethash.NewFaker(), vm.Config{}, nil, nil)
+	bc, _ = core.NewBlockChain(db, nil, gspec.Config, ethash.NewFaker(), vm.Config{}, nil, nil)
 	if _, err := bc.InsertChain(blocks); err != nil {
 		panic(err)
 	}
@@ -86,8 +88,8 @@ func makechain() (bc *core.BlockChain, addrHashes, txHashes []common.Hash) {
 }
 
 func makeTries() (chtTrie *trie.Trie, bloomTrie *trie.Trie, chtKeys, bloomKeys [][]byte) {
-	chtTrie = trie.NewEmpty(trie.NewDatabase(rawdb.NewMemoryDatabase()))
-	bloomTrie = trie.NewEmpty(trie.NewDatabase(rawdb.NewMemoryDatabase()))
+	chtTrie, _ = trie.New(common.Hash{}, trie.NewDatabase(rawdb.NewMemoryDatabase()))
+	bloomTrie, _ = trie.New(common.Hash{}, trie.NewDatabase(rawdb.NewMemoryDatabase()))
 	for i := 0; i < testChainLen; i++ {
 		// The element in CHT is <big-endian block number> -> <block hash>
 		key := make([]byte, 8)
