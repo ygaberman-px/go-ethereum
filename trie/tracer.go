@@ -50,9 +50,7 @@ func newTracer() *tracer {
 		deletes:    make(map[string]struct{}),
 		accessList: make(map[string][]byte),
 	}
-	t.origin[string(key)] = val
 }
-*/
 
 // onRead tracks the newly loaded trie node and caches the rlp-encoded
 // blob internally. Don't change the value outside of function since
@@ -116,9 +114,6 @@ func (t *tracer) copy() *tracer {
 	}
 	for path, blob := range t.accessList {
 		accessList[path] = common.CopyBytes(blob)
-	}
-	for key, val := range t.origin {
-		origin[key] = val
 	}
 	return &tracer{
 		inserts:    inserts,

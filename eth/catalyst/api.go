@@ -20,7 +20,6 @@ package catalyst
 import (
 	"errors"
 	"fmt"
-	"math/big"
 	"sync"
 	"time"
 
@@ -473,10 +472,6 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData) (engine.Payloa
 	if res := api.checkInvalidAncestor(block.Hash(), block.Hash()); res != nil {
 		return *res, nil
 	}
-	// If this block was rejected previously, keep rejecting it
-	if res := api.checkInvalidAncestor(block.Hash(), block.Hash()); res != nil {
-		return *res, nil
-	}
 	// If the parent is missing, we - in theory - could trigger a sync, but that
 	// would also entail a reorg. That is problematic if multiple sibling blocks
 	// are being fed to us, and even more so, if some semi-distant uncle shortens
@@ -640,106 +635,6 @@ func (api *ConsensusAPI) checkInvalidAncestor(check common.Hash, head common.Has
 	}
 }
 
-// delayPayloadImport stashes the given block away for import at a later time,
-// either via a forkchoice update or a sync extension. This method is meant to
-// be called by the newpayload command when the block seems to be ok, but some
-// prerequisite prevents it from being processed (e.g. no parent, or snap sync).
-func (api *ConsensusAPI) delayPayloadImport(block *types.Block) (beacon.PayloadStatusV1, error) {
-	// Sanity check that this block's parent is not on a previously invalidated
-	// chain. If it is, mark the block as invalid too.
-	if res := api.checkInvalidAncestor(block.ParentHash(), block.Hash()); res != nil {
-		return *res, nil
-	}
-	// Stash the block away for a potential forced forkchoice update to it
-	// at a later time.
-	api.remoteBlocks.put(block.Hash(), block.Header())
-
-	// Although we don't want to trigger a sync, if there is one already in
-	// progress, try to extend if with the current payload request to relieve
-	// some strain from the forkchoice update.
-	if err := api.eth.Downloader().BeaconExtend(api.eth.SyncMode(), block.Header()); err == nil {
-		log.Debug("Payload accepted for sync extension", "number", block.NumberU64(), "hash", block.Hash())
-		return beacon.PayloadStatusV1{Status: beacon.SYNCING}, nil
-	}
-	// Either no beacon sync was started yet, or it rejected the delivered
-	// payload as non-integratable on top of the existing sync. We'll just
-	// have to rely on the beacon client to forcefully update the head with
-	// a forkchoice update request.
-	if api.eth.SyncMode() == downloader.FullSync {
-		// In full sync mode, failure to import a well-formed block can only mean
-		// that the parent state is missing and the syncer rejected extending the
-		// current cycle with the new payload.
-		log.Warn("Ignoring payload with missing parent", "number", block.NumberU64(), "hash", block.Hash(), "parent", block.ParentHash())
-	} else {
-		// In non-full sync mode (i.e. snap sync) all payloads are rejected until
-		// snap sync terminates as snap sync relies on direct database injections
-		// and cannot afford concurrent out-if-band modifications via imports.
-		log.Warn("Ignoring payload while snap syncing", "number", block.NumberU64(), "hash", block.Hash())
-	}
-	return beacon.PayloadStatusV1{Status: beacon.SYNCING}, nil
-}
-
-// setInvalidAncestor is a callback for the downloader to notify us if a bad block
-// is encountered during the async sync.
-func (api *ConsensusAPI) setInvalidAncestor(invalid *types.Header, origin *types.Header) {
-	api.invalidLock.Lock()
-	defer api.invalidLock.Unlock()
-
-	api.invalidTipsets[origin.Hash()] = invalid
-	api.invalidBlocksHits[invalid.Hash()]++
-}
-
-// checkInvalidAncestor checks whether the specified chain end links to a known
-// bad ancestor. If yes, it constructs the payload failure response to return.
-func (api *ConsensusAPI) checkInvalidAncestor(check common.Hash, head common.Hash) *beacon.PayloadStatusV1 {
-	api.invalidLock.Lock()
-	defer api.invalidLock.Unlock()
-
-	// If the hash to check is unknown, return valid
-	invalid, ok := api.invalidTipsets[check]
-	if !ok {
-		return nil
-	}
-	// If the bad hash was hit too many times, evict it and try to reprocess in
-	// the hopes that we have a data race that we can exit out of.
-	badHash := invalid.Hash()
-
-	api.invalidBlocksHits[badHash]++
-	if api.invalidBlocksHits[badHash] >= invalidBlockHitEviction {
-		log.Warn("Too many bad block import attempt, trying", "number", invalid.Number, "hash", badHash)
-		delete(api.invalidBlocksHits, badHash)
-
-		for descendant, badHeader := range api.invalidTipsets {
-			if badHeader.Hash() == badHash {
-				delete(api.invalidTipsets, descendant)
-			}
-		}
-		return nil
-	}
-	// Not too many failures yet, mark the head of the invalid chain as invalid
-	if check != head {
-		log.Warn("Marked new chain head as invalid", "hash", head, "badnumber", invalid.Number, "badhash", badHash)
-		for len(api.invalidTipsets) >= invalidTipsetsCap {
-			for key := range api.invalidTipsets {
-				delete(api.invalidTipsets, key)
-				break
-			}
-		}
-		api.invalidTipsets[head] = invalid
-	}
-	// If the last valid hash is the terminal pow block, return 0x0 for latest valid hash
-	lastValid := &invalid.ParentHash
-	if header := api.eth.BlockChain().GetHeader(invalid.ParentHash, invalid.Number.Uint64()-1); header != nil && header.Difficulty.Sign() != 0 {
-		lastValid = &common.Hash{}
-	}
-	failure := "links to previously rejected block"
-	return &beacon.PayloadStatusV1{
-		Status:          beacon.INVALID,
-		LatestValidHash: lastValid,
-		ValidationError: &failure,
-	}
-}
-
 // invalid returns a response "INVALID" with the latest valid hash supplied by latest or to the current head
 // if no latestValid block was provided.
 func (api *ConsensusAPI) invalid(err error, latestValid *types.Header) engine.PayloadStatusV1 {
@@ -877,129 +772,5 @@ func getBody(block *types.Block) *engine.ExecutionPayloadBodyV1 {
 	return &engine.ExecutionPayloadBodyV1{
 		TransactionData: txs,
 		Withdrawals:     withdrawals,
-	}
-}
-
-// heartbeat loops indefinitely, and checks if there have been beacon client updates
-// received in the last while. If not - or if they but strange ones - it warns the
-// user that something might be off with their consensus node.
-//
-// TODO(karalabe): Spin this goroutine down somehow
-func (api *ConsensusAPI) heartbeat() {
-	// Sleep a bit on startup since there's obviously no beacon client yet
-	// attached, so no need to print scary warnings to the user.
-	time.Sleep(beaconUpdateStartupTimeout)
-
-	var (
-		offlineLogged time.Time
-	)
-	for {
-		// Sleep a bit and retrieve the last known consensus updates
-		time.Sleep(5 * time.Second)
-
-		// If the network is not yet merged/merging, don't bother scaring the user
-		ttd := api.eth.BlockChain().Config().TerminalTotalDifficulty
-		if ttd == nil {
-			continue
-		}
-		api.lastTransitionLock.Lock()
-		lastTransitionUpdate := api.lastTransitionUpdate
-		api.lastTransitionLock.Unlock()
-
-		api.lastForkchoiceLock.Lock()
-		lastForkchoiceUpdate := api.lastForkchoiceUpdate
-		api.lastForkchoiceLock.Unlock()
-
-		api.lastNewPayloadLock.Lock()
-		lastNewPayloadUpdate := api.lastNewPayloadUpdate
-		api.lastNewPayloadLock.Unlock()
-
-		// If there have been no updates for the past while, warn the user
-		// that the beacon client is probably offline
-		if api.eth.BlockChain().Config().TerminalTotalDifficultyPassed || api.eth.Merger().TDDReached() {
-			if time.Since(lastForkchoiceUpdate) > beaconUpdateConsensusTimeout && time.Since(lastNewPayloadUpdate) > beaconUpdateConsensusTimeout {
-				if time.Since(lastTransitionUpdate) > beaconUpdateExchangeTimeout {
-					if time.Since(offlineLogged) > beaconUpdateWarnFrequency {
-						if lastTransitionUpdate.IsZero() {
-							log.Warn("Post-merge network, but no beacon client seen. Please launch one to follow the chain!")
-						} else {
-							log.Warn("Previously seen beacon client is offline. Please ensure it is operational to follow the chain!")
-						}
-						offlineLogged = time.Now()
-					}
-					continue
-				}
-				if time.Since(offlineLogged) > beaconUpdateWarnFrequency {
-					if lastForkchoiceUpdate.IsZero() && lastNewPayloadUpdate.IsZero() {
-						log.Warn("Beacon client online, but never received consensus updates. Please ensure your beacon client is operational to follow the chain!")
-					} else {
-						log.Warn("Beacon client online, but no consensus updates received in a while. Please fix your beacon client to follow the chain!")
-					}
-					offlineLogged = time.Now()
-				}
-				continue
-			} else {
-				offlineLogged = time.Time{}
-			}
-		} else {
-			if time.Since(lastTransitionUpdate) > beaconUpdateExchangeTimeout {
-				if time.Since(offlineLogged) > beaconUpdateWarnFrequency {
-					// Retrieve the last few blocks and make a rough estimate as
-					// to when the merge transition should happen
-					var (
-						chain = api.eth.BlockChain()
-						head  = chain.CurrentBlock()
-						htd   = chain.GetTd(head.Hash(), head.NumberU64())
-						eta   time.Duration
-					)
-					if head.NumberU64() > 0 && htd.Cmp(ttd) < 0 {
-						// Accumulate the last 64 difficulties to estimate the growth
-						var diff float64
-
-						block := head
-						for i := 0; i < 64; i++ {
-							diff += float64(block.Difficulty().Uint64())
-							if parent := chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent == nil {
-								break
-							} else {
-								block = parent
-							}
-						}
-						// Estimate an ETA based on the block times and the difficulty growth
-						growth := diff / float64(head.Time()-block.Time()+1) // +1 to avoid div by zero
-						if growth > 0 {
-							if left := new(big.Int).Sub(ttd, htd); left.IsUint64() {
-								eta = time.Duration(float64(left.Uint64())/growth) * time.Second
-							} else {
-								eta = time.Duration(new(big.Int).Div(left, big.NewInt(int64(growth))).Uint64()) * time.Second
-							}
-						}
-					}
-					var message string
-					if htd.Cmp(ttd) > 0 {
-						if lastTransitionUpdate.IsZero() {
-							message = "Merge already reached, but no beacon client seen. Please launch one to follow the chain!"
-						} else {
-							message = "Merge already reached, but previously seen beacon client is offline. Please ensure it is operational to follow the chain!"
-						}
-					} else {
-						if lastTransitionUpdate.IsZero() {
-							message = "Merge is configured, but no beacon client seen. Please ensure you have one available before the transition arrives!"
-						} else {
-							message = "Merge is configured, but previously seen beacon client is offline. Please ensure it is operational before the transition arrives!"
-						}
-					}
-					if eta == 0 {
-						log.Warn(message)
-					} else {
-						log.Warn(message, "eta", common.PrettyAge(time.Now().Add(-eta))) // weird hack, but duration formatted doesn't handle days
-					}
-					offlineLogged = time.Now()
-				}
-				continue
-			} else {
-				offlineLogged = time.Time{}
-			}
-		}
 	}
 }

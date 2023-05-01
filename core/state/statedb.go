@@ -1024,13 +1024,6 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 		}
 		accountTrieNodesUpdated, accountTrieNodesDeleted = set.Size()
 	}
-	// Merge the dirty nodes of account trie into global set
-	if set != nil {
-		if err := nodes.Merge(set); err != nil {
-			return common.Hash{}, err
-		}
-		accountTrieNodes = set.Len()
-	}
 	if metrics.EnabledExpensive {
 		s.AccountCommits += time.Since(start)
 

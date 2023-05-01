@@ -289,8 +289,5 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.OverrideShanghai != nil {
 		c.OverrideShanghai = dec.OverrideShanghai
 	}
-	if dec.OverrideTerminalTotalDifficultyPassed != nil {
-		c.OverrideTerminalTotalDifficultyPassed = dec.OverrideTerminalTotalDifficultyPassed
-	}
 	return nil
 }

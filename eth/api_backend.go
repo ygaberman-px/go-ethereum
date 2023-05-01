@@ -143,9 +143,6 @@ func (b *EthAPIBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumbe
 		header := b.eth.blockchain.CurrentSafeBlock()
 		return b.eth.blockchain.GetBlock(header.Hash(), header.Number.Uint64()), nil
 	}
-	if number == rpc.SafeBlockNumber {
-		return b.eth.blockchain.CurrentSafeBlock(), nil
-	}
 	return b.eth.blockchain.GetBlockByNumber(uint64(number)), nil
 }
 

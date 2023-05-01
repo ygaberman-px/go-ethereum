@@ -104,7 +104,7 @@ func (f *Filter) Logs(ctx context.Context) ([]*types.Log, error) {
 		if header == nil {
 			return nil, errors.New("unknown block")
 		}
-		return f.blockLogs(ctx, header, false)
+		return f.blockLogs(ctx, header)
 	}
 	// Short-cut if all we care about is pending logs
 	if f.begin == rpc.PendingBlockNumber.Int64() {
@@ -223,7 +223,7 @@ func (f *Filter) indexedLogs(ctx context.Context, end uint64) ([]*types.Log, err
 			if header == nil || err != nil {
 				return logs, err
 			}
-			found, err := f.blockLogs(ctx, header, true)
+			found, err := f.blockLogs(ctx, header)
 			if err != nil {
 				return logs, err
 			}
@@ -248,7 +248,7 @@ func (f *Filter) unindexedLogs(ctx context.Context, end uint64) ([]*types.Log, e
 		if header == nil || err != nil {
 			return logs, err
 		}
-		found, err := f.blockLogs(ctx, header, false)
+		found, err := f.blockLogs(ctx, header)
 		if err != nil {
 			return logs, err
 		}
@@ -298,19 +298,6 @@ func (f *Filter) checkMatches(ctx context.Context, header *types.Header) ([]*typ
 		logs[i] = &logcopy
 	}
 	return logs, nil
-}
-
-// pendingLogs returns the logs matching the filter criteria within the pending block.
-func (f *Filter) pendingLogs() ([]*types.Log, error) {
-	block, receipts := f.sys.backend.PendingBlockAndReceipts()
-	if bloomFilter(block.Bloom(), f.addresses, f.topics) {
-		var unfiltered []*types.Log
-		for _, r := range receipts {
-			unfiltered = append(unfiltered, r.Logs...)
-		}
-		return filterLogs(unfiltered, nil, nil, f.addresses, f.topics), nil
-	}
-	return nil, nil
 }
 
 // pendingLogs returns the logs matching the filter criteria within the pending block.

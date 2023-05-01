@@ -624,11 +624,6 @@ func (c *ChainConfig) IsGrayGlacier(num *big.Int) bool {
 	return isBlockForked(c.GrayGlacierBlock, num)
 }
 
-// IsGrayGlacier returns whether num is either equal to the Gray Glacier (EIP-5133) fork block or greater.
-func (c *ChainConfig) IsGrayGlacier(num *big.Int) bool {
-	return isForked(c.GrayGlacierBlock, num)
-}
-
 // IsTerminalPoWBlock returns whether the given block is the last block of PoW stage.
 func (c *ChainConfig) IsTerminalPoWBlock(parentTotalDiff *big.Int, totalDiff *big.Int) bool {
 	if c.TerminalTotalDifficulty == nil {

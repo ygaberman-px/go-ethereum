@@ -111,10 +111,6 @@ type callTracerConfig struct {
 	WithLog     bool `json:"withLog"`     // If true, call tracer will collect event logs
 }
 
-type callTracerConfig struct {
-	OnlyTopCall bool `json:"onlyTopCall"` // If true, call tracer won't collect any subcalls
-}
-
 // newCallTracer returns a native go tracer which tracks
 // call frames of a tx, and implements vm.EVMLogger.
 func newCallTracer(ctx *tracers.Context, cfg json.RawMessage) (tracers.Tracer, error) {

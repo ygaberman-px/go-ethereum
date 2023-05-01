@@ -228,7 +228,7 @@ func (dl *diskLayer) proveRange(ctx *generatorContext, trieId *trie.ID, prefix [
 	// The snap state is exhausted, pass the entire key/val set for verification
 	root := trieId.Root
 	if origin == nil && !diskMore {
-		stackTr := trie.NewStackTrieWithOwner(nil, owner)
+		stackTr := trie.NewStackTrie(nil)
 		for i, key := range keys {
 			stackTr.Update(key, vals[i])
 		}

@@ -37,7 +37,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
-	lru "github.com/hashicorp/golang-lru"
 )
 
 // Config represents the configuration of the filter system.

@@ -99,9 +99,6 @@ type Trie interface {
 	// DeleteAccount abstracts an account deletion from the trie.
 	DeleteAccount(address common.Address) error
 
-	// TryDeleteAccount abstracts an account deletion from the trie.
-	TryDeleteAccount(key []byte) error
-
 	// Hash returns the root hash of the trie. It does not write to the database and
 	// can be used even if the trie doesn't have one.
 	Hash() common.Hash

@@ -83,16 +83,6 @@ func NewStackTrieWithOwner(writeFn NodeWriteFunc, owner common.Hash) *StackTrie 
 	}
 }
 
-// NewStackTrieWithOwner allocates and initializes an empty trie, but with
-// the additional owner field.
-func NewStackTrieWithOwner(db ethdb.KeyValueWriter, owner common.Hash) *StackTrie {
-	return &StackTrie{
-		owner:    owner,
-		nodeType: emptyNode,
-		db:       db,
-	}
-}
-
 // NewFromBinary initialises a serialized stacktrie with the given db.
 func NewFromBinary(data []byte, writeFn NodeWriteFunc) (*StackTrie, error) {
 	var st StackTrie
